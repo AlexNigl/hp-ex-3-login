@@ -1,0 +1,85 @@
+include:
+  - project: widas/software-quality/gitlab-template-projects/common-templates
+    file: docker.yml
+  - project: widas/software-quality/gitlab-template-projects/common-templates
+    file: deployment-v2.yml
+
+variables:
+  DOCKER_DRIVER: overlay2
+  TEMPLATE_REPO: https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.widas.de/widas/software-quality/gitlab-template-projects/common-templates.git
+  SCRIPTS_PATH: common-templates/ci-scripts
+  DEPLOYMENT_YML_PATH: common-templates/deployment-ymls/service-all-in-one.yml.j2
+
+stages:
+  - prepare
+  - build
+  - package
+  - deploy
+  - cleanup
+
+get_prereqiusites:
+  image: docker-registry.widas.de:5050/dockerregistry/common/alpine-git-curl-jq:v1
+  stage: prepare
+  script:
+    - rm -rf common-templates
+    - git clone ${TEMPLATE_REPO}
+  artifacts:
+    paths:
+      - ./${SCRIPTS_PATH}
+      - ./${DEPLOYMENT_YML_PATH}
+    expire_in: 1 day
+
+
+build:
+  image: node:22-alpine
+  stage: build
+  script:
+    - ${SCRIPTS_PATH}/npm-add-user.sh
+    - npm i --force # install all dependencies
+    - mkdir -p ./final-build
+    - cp -rf ./public ./final-build
+    - cp ./package.json ./final-build/package.json
+    - npm install --omit=dev --prefix ./final-build # for shipping only install prod dependencies
+    - cp -rf ./index.js ./final-build/index.js
+  artifacts:
+    paths:
+      - final-build
+    expire_in: 1 hrs
+
+docker_build:
+  image: $DOCKER_IMAGE_DEFAULT
+  stage: package
+  script:
+    - mkdir -p ~/.docker
+    - echo $CIM_DOCKER_CRED > ~/.docker/config.json
+    - CI_PROJECT_PATH=$(echo "$CI_PROJECT_PATH" | tr '[:upper:]' '[:lower:]')
+    - docker build -t $DOCKER_REGISTRY/$CI_PROJECT_PATH:$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHA-$CI_PIPELINE_ID -f Dockerfile .
+    - docker push $DOCKER_REGISTRY/$CI_PROJECT_PATH:$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHA-$CI_PIPELINE_ID
+  only:
+    - development
+    - staging
+    - test
+    - /^dev-.*/
+
+# In this stage, we remove the local Docker image from the runner which we created in the build stage. We need this to make sure our build runners don't run out of space
+clean_local_docker_image_dev:
+  image: $DOCKER_IMAGE_DEFAULT
+  stage: cleanup
+  script:
+    - CI_PROJECT_PATH=$(echo "$CI_PROJECT_PATH" | tr '[:upper:]' '[:lower:]')
+    - docker rmi -f $DOCKER_REGISTRY/$CI_PROJECT_PATH:$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHA-$CI_PIPELINE_ID
+  only:
+    - development
+    - staging
+    - qa
+    - /^dev-.*/
+
+kubep_test_publish:
+  extends: .deployment
+  stage: deploy
+  variables:
+    ENV: test
+    KUBECONFIG_FILE: $kubep_test_custom
+    DOCKER_IMAGE: $DOCKER_REGISTRY/$CI_PROJECT_PATH:$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHA-$CI_PIPELINE_ID
+  only:
+    - development
