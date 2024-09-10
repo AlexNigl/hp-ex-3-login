@@ -1,4 +1,4 @@
-FROM docker.io/node:node:22-alpine
+FROM docker.io/node:22-alpine
 COPY ./final-build/ /
 RUN ls
 RUN mkdir logs

@@ -4,6 +4,10 @@ include:
   - project: widas/software-quality/gitlab-template-projects/common-templates
     file: deployment-v2.yml
 
+default:
+  tags:
+  - kubernetes
+
 variables:
   DOCKER_DRIVER: overlay2
   TEMPLATE_REPO: https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.widas.de/widas/software-quality/gitlab-template-projects/common-templates.git
@@ -15,7 +19,6 @@ stages:
   - build
   - package
   - deploy
-  - cleanup
 
 get_prereqiusites:
   image: docker-registry.widas.de:5050/dockerregistry/common/alpine-git-curl-jq:v1
@@ -47,31 +50,19 @@ build:
     expire_in: 1 hrs
 
 docker_build:
-  image: $DOCKER_IMAGE_DEFAULT
+  image: quay.io/buildah/stable
   stage: package
   script:
     - mkdir -p ~/.docker
     - echo $CIM_DOCKER_CRED > ~/.docker/config.json
+    - echo "$CI_REGISTRY_PASSWORD" | buildah login -u "$CI_REGISTRY_USER" --password-stdin $CI_REGISTRY
     - CI_PROJECT_PATH=$(echo "$CI_PROJECT_PATH" | tr '[:upper:]' '[:lower:]')
-    - docker build -t $DOCKER_REGISTRY/$CI_PROJECT_PATH:$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHA-$CI_PIPELINE_ID -f Dockerfile .
-    - docker push $DOCKER_REGISTRY/$CI_PROJECT_PATH:$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHA-$CI_PIPELINE_ID
+    - buildah build -t $DOCKER_REGISTRY/$CI_PROJECT_PATH:$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHA-$CI_PIPELINE_ID -f Dockerfile .
+    - buildah push $DOCKER_REGISTRY/$CI_PROJECT_PATH:$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHA-$CI_PIPELINE_ID
   only:
     - development
     - staging
     - test
-    - /^dev-.*/
-
-# In this stage, we remove the local Docker image from the runner which we created in the build stage. We need this to make sure our build runners don't run out of space
-clean_local_docker_image_dev:
-  image: $DOCKER_IMAGE_DEFAULT
-  stage: cleanup
-  script:
-    - CI_PROJECT_PATH=$(echo "$CI_PROJECT_PATH" | tr '[:upper:]' '[:lower:]')
-    - docker rmi -f $DOCKER_REGISTRY/$CI_PROJECT_PATH:$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHA-$CI_PIPELINE_ID
-  only:
-    - development
-    - staging
-    - qa
     - /^dev-.*/
 
 kubep_test_publish:
